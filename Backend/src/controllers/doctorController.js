@@ -104,23 +104,24 @@ exports.updateProfile = async (req, res) => {
 exports.getQueue = async (req, res) => {
   try {
     const doctorId = req.user.id;
-    const today = new Date().toISOString().split('T')[0]; // Tanggal Hari Ini
+    // Menggunakan zona waktu Jakarta agar sinkron dengan Check-in Pasien
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
 
     const queue = await Appointment.findAll({
       where: {
-        // Cari appointment milik dokter ini
-        // Status harus 'waiting' (artinya pasien sudah klik check-in)
-        status: 'waiting', 
-        // Tanggal harus hari ini (Opsional, tapi bagus untuk keamanan ganda)
-        date: today 
+        status: 'WAITING', // Pastikan HURUF BESAR sesuai data di DB
       },
       include: [
         {
           model: Schedule,
-          where: { doctor_id: doctorId } // Pastikan jadwal milik dokter tsb
+          as: 'schedule', // Alias harus sesuai dengan models/index.js
+          where: { 
+            doctor_id: doctorId,
+            date: today // Filter tanggal dilakukan di sini (Tabel Schedule)
+          }
         },
         {
-          model: User, // Include data pasien
+          model: User,
           as: 'patient',
           attributes: ['name', 'id']
         }
@@ -128,9 +129,10 @@ exports.getQueue = async (req, res) => {
       order: [['queue_number', 'ASC']]
     });
 
-    res.status(200).json({ data: queue });
+    res.status(200).json({ success: true, data: queue });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("Queue Error:", error);
+    res.status(500).json({ message: "Gagal mengambil antrean", error: error.message });
   }
 };
 

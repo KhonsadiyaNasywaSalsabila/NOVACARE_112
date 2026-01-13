@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 
@@ -7,16 +7,14 @@ const DashboardPatient = () => {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [theme, setTheme] = useState(null);
 
-  // --- 1. LOGIKA PEMBAGIAN WAKTU & KONTRAS EKSTRIM ---
+  // --- 1. LOGIKA TEMA BERDASARKAN WAKTU ---
   useEffect(() => {
     const hour = new Date().getHours();
     let selectedTheme;
 
     if (hour >= 5 && hour < 11) {
-      // PAGI (5 - 11)
       selectedTheme = {
         greeting: "Selamat Pagi", mode: "light", icon: "🌅",
         bg: "#f8fafc", accent: "#f43f5e",
@@ -24,7 +22,6 @@ const DashboardPatient = () => {
         text: "#0f172a", subText: "#475569", orb1: "#fecdd3", orb2: "#bae6fd"
       };
     } else if (hour >= 11 && hour < 15) {
-      // SIANG (11 - 15)
       selectedTheme = {
         greeting: "Selamat Siang", mode: "light", icon: "☀️",
         bg: "#f0f9ff", accent: "#0ea5e9",
@@ -32,7 +29,6 @@ const DashboardPatient = () => {
         text: "#0f172a", subText: "#475569", orb1: "#7dd3fc", orb2: "#fef08a"
       };
     } else if (hour >= 15 && hour < 18) {
-      // SORE (15 - 18)
       selectedTheme = {
         greeting: "Selamat Sore", mode: "light", icon: "🌇",
         bg: "#fff7ed", accent: "#f97316",
@@ -40,22 +36,18 @@ const DashboardPatient = () => {
         text: "#0f172a", subText: "#475569", orb1: "#fdba74", orb2: "#fca5a5"
       };
     } else {
-      // MALAM (18 - 5): HIGH CONTRAST MODE
       selectedTheme = {
         greeting: "Selamat Malam", mode: "dark", icon: "🌙",
-        bg: "#020617", 
-        accent: "#a5b4fc", // Ungu Muda Neon (Ganti Ungu Tua)
-        glass: "rgba(30, 41, 59, 1)", // Card Slate-800 Solid (Kontras terhadap Background)
-        border: "rgba(255, 255, 255, 0.2)",
-        text: "#ffffff", // Font Putih Murni (Ganti Hitam)
-        subText: "#e2e8f0", // Font Silver Terang (Ganti Hitam/Abu Tua)
-        orb1: "#1e1b4b", orb2: "#312e81"
+        bg: "#020617", accent: "#a5b4fc",
+        glass: "rgba(30, 41, 59, 1)", border: "rgba(255, 255, 255, 0.2)",
+        text: "#ffffff", subText: "#e2e8f0", orb1: "#1e1b4b", orb2: "#312e81"
       };
     }
     setTheme(selectedTheme);
     fetchMyAppointments();
   }, []);
 
+  // --- 2. FETCH DATA ANTREAN ---
   const fetchMyAppointments = async () => {
     try {
       const response = await api.get('/patients/my-appointments');
@@ -64,10 +56,32 @@ const DashboardPatient = () => {
         return (order[a.status?.toUpperCase()] || 99) - (order[b.status?.toUpperCase()] || 99);
       });
       setAppointments(sortedData);
-    } catch (error) { console.error(error); } finally { setLoading(false); }
+    } catch (error) { 
+      console.error("Gagal load data", error); 
+    } finally { 
+      setLoading(false); 
+    }
   };
 
-  if (!theme) return null;
+  // --- 3. FUNGSI HANDLE CHECK-IN (SOLUSI ERROR) ---
+  const handleCheckIn = async (appointmentId) => {
+    if (!window.confirm("Konfirmasi kehadiran Anda di klinik sekarang?")) return;
+    
+    try {
+      // Langsung panggil API Put Check-in
+      const response = await api.put(`/patients/checkin/${appointmentId}`);
+      
+      if (response.data.success) {
+        alert("✅ " + response.data.message);
+        // Refresh data agar tiket berubah dari BOOKED ke WAITING secara real-time
+        fetchMyAppointments(); 
+      }
+    } catch (error) {
+      alert("❌ Gagal Check-in: " + (error.response?.data?.message || "Terjadi kesalahan"));
+    }
+  };
+
+  if (!theme || loading) return null;
 
   const isToday = (date) => new Date(date).toLocaleDateString('en-CA') === new Date().toLocaleDateString('en-CA');
 
@@ -125,9 +139,10 @@ const DashboardPatient = () => {
            Tiket Antrean Aktif
         </h3>
 
-        {appointments.map((item) => {
+        {appointments.length === 0 ? (
+            <p style={{ color: theme.subText, textAlign: 'center', marginTop: 50 }}>Belum ada jadwal janji temu aktif.</p>
+        ) : appointments.map((item) => {
           const status = item.status?.toUpperCase();
-          // Fix Gelar Ganda dr. dr.
           const cleanDocName = item.doctor?.name.replace(/^dr\.\s+/i, '');
 
           return (
@@ -176,7 +191,12 @@ const DashboardPatient = () => {
                     <p style={styles.badgeLabel}>NOMOR BOOKING</p>
                     <h1 style={styles.badgeNumber}>{item.queue_number}</h1>
                     {isToday(item.schedule?.date) && (
-                        <button onClick={() => navigate(`/checkin/${item.id}`)} style={styles.btnCheckin}>CHECK-IN</button>
+                        <button 
+                            onClick={() => handleCheckIn(item.id)} 
+                            style={styles.btnCheckin}
+                        >
+                            CHECK-IN
+                        </button>
                     )}
                   </div>
                 )}
@@ -198,15 +218,15 @@ const DashboardPatient = () => {
 };
 
 const styles = {
-  pageWrapper: { minHeight: '100vh', padding: '30px 0', transition: 'background 0.5s ease' },
+  pageWrapper: { minHeight: '100vh', padding: '30px 0', transition: 'background 0.5s ease', overflowX: 'hidden' },
   container: { maxWidth: '1000px', margin: '0 auto', padding: '0 25px', position: 'relative', zIndex: 1 },
   header: { marginBottom: '50px' },
   menuGrid: { display: 'flex', gap: '20px', marginBottom: '50px' },
-  menuCard: { padding: '25px', borderRadius: '25px', border: '1px solid', display: 'flex', alignItems: 'center', gap: '20px' },
+  menuCard: { padding: '25px', borderRadius: '25px', border: '1px solid', display: 'flex', alignItems: 'center', gap: '20px', cursor: 'pointer' },
   iconBox: { width: '50px', height: '50px', background: 'rgba(255,255,255,0.1)', borderRadius: '15px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' },
   ticketContainer: { display: 'flex', borderRadius: '35px', border: '1px solid', marginBottom: '35px', position: 'relative', overflow: 'visible' },
   ticketMain: { flex: 2.3, padding: '40px' },
-  ticketSide: { flex: 1, padding: '25px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.03)' },
+  ticketSide: { flex: 1, padding: '25px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.03)', borderBottomRightRadius: '35px', borderTopRightRadius: '35px' },
   statusPill: { padding: '5px 15px', borderRadius: '50px', fontSize: '0.75rem', fontWeight: '900', display: 'inline-block', letterSpacing: '1.5px' },
   label: { display: 'block', fontSize: '0.75rem', fontWeight: '900', marginBottom: '6px', letterSpacing: '1px' },
   infoGrid: { display: 'flex', gap: '50px', marginTop: '25px' },

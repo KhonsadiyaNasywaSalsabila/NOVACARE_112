@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import api from '../../services/api'; 
 
 const InputDiagnosis = () => {
-  // --- STATE LOGIC ---
+  // --- STATE MANAGEMENT ---
   const [queue, setQueue] = useState([]);
   const [selectedAppointment, setSelectedAppointment] = useState('');
   const [patientData, setPatientData] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState({
     diagnosis: '',
@@ -14,14 +15,20 @@ const InputDiagnosis = () => {
     notes: ''
   });
 
-  // State untuk "Keranjang Belanja" Resep Obat
+  // State untuk Manajemen Resep (Temporary List)
   const [medName, setMedName] = useState('');
   const [medDose, setMedDose] = useState('');
   const [medList, setMedList] = useState([]); 
 
-  // 1. Fetch Queue
+  // --- 1. EFFECT: AUTO-POLLING ANTREAN ---
   useEffect(() => {
     fetchQueue();
+    // Cek pasien baru yang check-in setiap 10 detik tanpa refresh halaman
+    const interval = setInterval(() => {
+      fetchQueue();
+    }, 10000); 
+
+    return () => clearInterval(interval);
   }, []);
 
   const fetchQueue = async () => {
@@ -29,44 +36,37 @@ const InputDiagnosis = () => {
       const res = await api.get('/doctor/queue');
       setQueue(res.data.data || []);
     } catch (error) {
-      console.error("Gagal ambil antrian:", error);
+      console.error("Gagal ambil antrean:", error);
     }
   };
 
-  // --- HELPER: FORMAT JAM (FIX JAM BERGERAK) ---
+  // --- 2. HELPERS ---
   const formatTime = (dateString) => {
     if (!dateString) return '-';
-    try {
-        return new Date(dateString).toLocaleTimeString('id-ID', {
-            hour: '2-digit', 
-            minute: '2-digit'
-        });
-    } catch (e) {
-        return '-';
-    }
+    return new Date(dateString).toLocaleTimeString('id-ID', {
+      hour: '2-digit', minute: '2-digit'
+    });
   };
 
-  // 2. Handle Select Patient
   const handleCardClick = (item) => {
     setSelectedAppointment(item.id);
     setPatientData(item);
-    
-    // Reset form saat ganti pasien
+    // Reset form & resep saat berpindah pasien
     setForm({ diagnosis: '', treatment: '', prescription: '', notes: '' });
     setMedList([]); 
   };
 
-  // 3. Logic Tambah Obat
+  // --- 3. LOGIKA RESEP OBAT ---
   const handleAddMedicine = (e) => {
     e.preventDefault();
     if (!medName || !medDose) return;
 
-    const newItem = { name: medName, dose: medDose };
-    const newList = [...medList, newItem];
+    const newList = [...medList, { name: medName, dose: medDose }];
     setMedList(newList);
     setMedName('');
     setMedDose('');
 
+    // Gabungkan list menjadi string untuk dikirim ke database
     const prescriptionString = newList.map(m => `${m.name} (${m.dose})`).join(', ');
     setForm(prev => ({ ...prev, prescription: prescriptionString }));
   };
@@ -78,11 +78,12 @@ const InputDiagnosis = () => {
     setForm(prev => ({ ...prev, prescription: prescriptionString }));
   };
 
-  // 4. Submit
+  // --- 4. SUBMIT PEMERIKSAAN ---
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedAppointment) return alert("Harap pilih pasien terlebih dahulu!");
-
+    if (!selectedAppointment) return alert("Pilih pasien terlebih dahulu!");
+    
+    setLoading(true);
     try {
       await api.post('/doctor/medical-record', {
         appointment_id: selectedAppointment,
@@ -92,23 +93,25 @@ const InputDiagnosis = () => {
         notes: form.notes
       });
       
-      alert("✅ Pemeriksaan Selesai!");
+      alert("✨ Pemeriksaan Selesai & Data Berhasil Disimpan!");
       
-      // Reset All
+      // Reset State & Refresh Antrean
       setForm({ diagnosis: '', treatment: '', prescription: '', notes: '' });
       setSelectedAppointment('');
       setPatientData(null);
       setMedList([]);
       fetchQueue(); 
     } catch (error) {
-      alert("Gagal menyimpan: " + (error.response?.data?.message || "Terjadi kesalahan"));
+      alert("❌ Gagal: " + (error.response?.data?.message || "Terjadi kesalahan"));
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div style={styles.workspaceContainer}>
       
-      {/* --- SIDEBAR: WAITING LIST (30%) --- */}
+      {/* SIDEBAR: DAFTAR ANTREAN (WAITING) */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarHeader}>
             <h3 style={{margin:0, color:'#1e293b'}}>Antrean Pasien</h3>
@@ -129,261 +132,139 @@ const InputDiagnosis = () => {
                     }}
                   >
                     <div style={styles.cardTop}>
-                        <span style={isActive ? styles.queueNumActive : styles.queueNum}>
-                            #{item.queue_number}
-                        </span>
-                        
-                        {/* --- PERBAIKAN: MENAMPILKAN JAM CHECK-IN DARI DB --- */}
-                        <span style={{fontSize:'0.8rem', color: isActive?'white':'#94a3b8', fontWeight:'bold'}}>
-                            {item.check_in_time ? formatTime(item.check_in_time) : "Belum Check-in"}
+                        <span style={isActive ? styles.queueNumActive : styles.queueNum}>#{item.queue_number}</span>
+                        <span style={{fontSize:'0.75rem', color: isActive?'white':'#94a3b8', fontWeight:'bold'}}>
+                            {item.check_in_time ? formatTime(item.check_in_time) : "Check-in Baru"}
                         </span>
                     </div>
-                    <div style={{fontWeight:'bold', fontSize:'1.1rem', marginBottom:'5px'}}>
-                        {item.patient?.name}
-                    </div>
-                    <div style={{fontSize:'0.85rem', opacity:0.8}}>
-                        {item.symptoms ? item.symptoms.substring(0, 30)+"..." : "Tidak ada keluhan awal"}
+                    <div style={{fontWeight:'800', fontSize:'1rem', marginBottom:'4px'}}>{item.patient?.name}</div>
+                    <div style={{fontSize:'0.8rem', opacity:0.8, fontStyle: 'italic'}}>
+                        "{item.symptoms || 'Tidak ada keluhan tertulis'}"
                     </div>
                   </div>
                 )
               })
             ) : (
-              <div style={styles.emptyQueue}>
-                  ☕ Tidak ada pasien antre.
-              </div>
+              <div style={styles.emptyQueue}>☕ Tidak ada pasien di ruang tunggu.</div>
             )}
         </div>
       </div>
 
-      {/* --- MAIN: EXAMINATION EDITOR (70%) --- */}
+      {/* MAIN CONTENT: EDITOR MEDIS */}
       <div style={styles.mainContent}>
-        
-        {/* HEADER PASIEN AKTIF */}
         {patientData ? (
-            <>
+            <div style={{ maxWidth: '850px' }}>
                 <div style={styles.patientHeader}>
-                    <div style={styles.avatarPlaceholder}>{patientData.patient?.name.charAt(0)}</div>
+                    <div style={styles.avatar}>{patientData.patient?.name.charAt(0)}</div>
                     <div>
-                        <h2 style={{margin:0, color:'#1e293b'}}>{patientData.patient?.name}</h2>
-                        <div style={styles.symptomBadge}>
-                            ⚠️ Keluhan: "{patientData.symptoms}"
-                        </div>
+                        <h2 style={{margin:0, color:'#0f172a'}}>{patientData.patient?.name}</h2>
+                        <div style={styles.symptomBadge}>⚠️ Keluhan Awal: {patientData.symptoms}</div>
                     </div>
                 </div>
 
-                <form onSubmit={handleSubmit} style={styles.editorForm}>
-                    
-                    {/* SECTION 1: DIAGNOSIS */}
-                    <div style={styles.formSection}>
-                        <label style={styles.label}>📝 Diagnosis Dokter</label>
-                        <textarea 
-                            rows="2"
-                            placeholder="Ketik diagnosis utama (misal: Hipertensi Grade 1)..."
-                            value={form.diagnosis}
-                            onChange={e => setForm({...form, diagnosis: e.target.value})}
-                            style={styles.inputArea}
-                            required
-                        />
-                        <div style={styles.chipContainer}>
-                            {['Demam Berdarah', 'ISPA', 'Dispepsia', 'Migrain', 'Hipertensi'].map(tag => (
-                                <span 
-                                    key={tag} 
-                                    style={styles.chip}
-                                    onClick={() => setForm(prev => ({...prev, diagnosis: prev.diagnosis ? prev.diagnosis + ', ' + tag : tag}))}
-                                >
-                                    + {tag}
-                                </span>
-                            ))}
+                <form onSubmit={handleSubmit} style={styles.bentoForm}>
+                    <div style={styles.formGrid}>
+                        {/* DIAGNOSIS */}
+                        <div style={styles.inputGroup}>
+                            <label style={styles.label}>📝 DIAGNOSIS UTAMA</label>
+                            <textarea 
+                                rows="3"
+                                placeholder="Tulis diagnosa medis..."
+                                value={form.diagnosis}
+                                onChange={e => setForm({...form, diagnosis: e.target.value})}
+                                style={styles.textArea}
+                                required
+                            />
+                        </div>
+
+                        {/* TINDAKAN */}
+                        <div style={styles.inputGroup}>
+                            <label style={styles.label}>🛠️ TINDAKAN (TREATMENT)</label>
+                            <textarea 
+                                rows="3"
+                                placeholder="Tindakan yang diberikan..."
+                                value={form.treatment}
+                                onChange={e => setForm({...form, treatment: e.target.value})}
+                                style={styles.textArea}
+                            />
                         </div>
                     </div>
 
-                    {/* SECTION 2: TINDAKAN (TREATMENT) */}
-                    <div style={styles.formSection}>
-                        <label style={styles.label}>🛠️ Tindakan Medis (Treatment)</label>
-                        <textarea 
-                            rows="2"
-                            placeholder="Tindakan yang dilakukan (misal: Nebulizer, Jahit Luka)..."
-                            value={form.treatment}
-                            onChange={e => setForm({...form, treatment: e.target.value})}
-                            style={styles.inputArea}
-                        />
-                        <div style={styles.chipContainer}>
-                            {['Nebulizer', 'Pemberian Oksigen', 'Rawat Luka', 'Suntik Vitamin', 'EKG'].map(tag => (
-                                <span 
-                                    key={tag} 
-                                    style={{...styles.chip, background: '#e0e7ff', color: '#4338ca', borderColor: '#c7d2fe'}} 
-                                    onClick={() => setForm(prev => ({...prev, treatment: prev.treatment ? prev.treatment + ', ' + tag : tag}))}
-                                >
-                                    + {tag}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* SECTION 3: RESEP */}
-                    <div style={styles.formSection}>
-                        <label style={styles.label}>💊 Resep Obat</label>
-                        
-                        <div style={styles.medInputGroup}>
-                            <input 
-                                type="text" 
-                                placeholder="Nama Obat" 
-                                value={medName}
-                                onChange={e => setMedName(e.target.value)}
-                                style={{...styles.inputShort, flex: 2}}
-                            />
-                            <input 
-                                type="text" 
-                                placeholder="Dosis (3x1)" 
-                                value={medDose}
-                                onChange={e => setMedDose(e.target.value)}
-                                style={{...styles.inputShort, flex: 1}}
-                            />
-                            <button 
-                                onClick={handleAddMedicine}
-                                style={styles.btnAddMed}
-                                type="button" 
-                            >
-                                + Tambah
-                            </button>
+                    {/* RESEP OBAT (INTERAKTIF) */}
+                    <div style={{marginTop: '30px'}}>
+                        <label style={styles.label}>💊 INPUT RESEP OBAT</label>
+                        <div style={styles.medInputs}>
+                            <input type="text" placeholder="Nama Obat" value={medName} onChange={e => setMedName(e.target.value)} style={styles.input} />
+                            <input type="text" placeholder="Dosis (3x1)" value={medDose} onChange={e => setMedDose(e.target.value)} style={styles.input} />
+                            <button onClick={handleAddMedicine} style={styles.btnAddMed} type="button">+ Tambah</button>
                         </div>
 
-                        <div style={styles.medListContainer}>
-                            {medList.length === 0 && (
-                                <div style={{color:'#94a3b8', fontStyle:'italic', padding:'10px'}}>Belum ada obat ditambahkan.</div>
-                            )}
+                        <div style={styles.medBucket}>
                             {medList.map((med, idx) => (
                                 <div key={idx} style={styles.medItem}>
-                                    <div><strong>{med.name}</strong> <span style={{color:'#64748b'}}>({med.dose})</span></div>
+                                    <span><strong>{med.name}</strong> — {med.dose}</span>
                                     <button type="button" onClick={() => handleRemoveMedicine(idx)} style={styles.btnRemove}>✕</button>
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    {/* SECTION 4: NOTES */}
-                    <div style={styles.formSection}>
-                        <label style={styles.label}>🗒️ Catatan / Saran</label>
-                        <input 
-                            type="text"
-                            placeholder="Saran untuk pasien (misal: Perbanyak minum air putih)..."
-                            value={form.notes}
-                            onChange={e => setForm({...form, notes: e.target.value})}
-                            style={styles.inputShort}
-                        />
+                    <div style={styles.inputGroup}>
+                        <label style={{...styles.label, marginTop: '25px'}}>🗒️ CATATAN TAMBAHAN</label>
+                        <input type="text" placeholder="Saran/catatan untuk pasien..." value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} style={styles.input} />
                     </div>
 
-                    {/* ACTION BUTTON */}
-                    <div style={styles.actionFooter}>
-                        <button type="submit" style={styles.btnSubmit}>
-                            ✅ Simpan & Selesai
-                        </button>
-                    </div>
-
+                    <button type="submit" disabled={loading} style={styles.btnSubmit}>
+                        {loading ? "MENYIMPAN..." : "SELESAIKAN PEMERIKSAAN"}
+                    </button>
                 </form>
-            </>
+            </div>
         ) : (
             <div style={styles.emptyState}>
-                <div style={{fontSize:'4rem'}}>👈</div>
-                <h3>Pilih Pasien dari Daftar Antrean</h3>
-                <p>Klik kartu pasien di sebelah kiri untuk memulai pemeriksaan.</p>
+                <div style={{fontSize:'5rem'}}>🩺</div>
+                <h2>Siap Memulai Pemeriksaan?</h2>
+                <p>Pilih pasien yang berada di <b>Daftar Antrean</b> untuk mulai mengisi rekam medis.</p>
             </div>
         )}
       </div>
-
     </div>
   );
 };
 
-// --- STYLES ---
+// --- MODERN STYLES ---
 const styles = {
-  workspaceContainer: {
-    display: 'flex', height: '100vh', background: '#f1f5f9', fontFamily: "'Plus Jakarta Sans', sans-serif", overflow: 'hidden',
-  },
-  sidebar: {
-    flex: '0 0 320px', background: 'white', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column',
-  },
-  sidebarHeader: {
-    padding: '20px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-  },
-  badgeCount: {
-    background: '#e0f2fe', color: '#0ea5e9', fontSize:'0.75rem', fontWeight:'bold', padding:'4px 8px', borderRadius:'12px'
-  },
-  cardList: {
-    flex: 1, overflowY: 'auto', padding: '15px', display: 'flex', flexDirection: 'column', gap: '15px'
-  },
-  patientCard: {
-    background: 'white', borderRadius: '12px', padding: '15px', border: '1px solid #f1f5f9',
-    boxShadow: '0 2px 5px rgba(0,0,0,0.03)', cursor: 'pointer', transition: 'all 0.2s',
-  },
-  patientCardActive: {
-    background: '#2563eb', color: 'white', border: '1px solid #2563eb',
-    boxShadow: '0 10px 20px rgba(37, 99, 235, 0.3)', transform: 'scale(1.02)',
-  },
-  cardTop: { display: 'flex', justifyContent: 'space-between', marginBottom: '8px' },
-  queueNum: { background: '#f1f5f9', color: '#64748b', padding:'2px 8px', borderRadius:'6px', fontWeight:'bold', fontSize:'0.8rem' },
-  queueNumActive: { background: 'rgba(255,255,255,0.2)', color: 'white', padding:'2px 8px', borderRadius:'6px', fontWeight:'bold', fontSize:'0.8rem' },
-  emptyQueue: { textAlign: 'center', marginTop: '50px', color: '#94a3b8' },
-  mainContent: {
-    flex: 1, overflowY: 'auto', padding: '40px', display: 'flex', flexDirection: 'column',
-  },
-  patientHeader: {
-    display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '30px',
-    background: 'white', padding: '20px', borderRadius: '16px', boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
-  },
-  avatarPlaceholder: {
-    width: '60px', height: '60px', borderRadius: '50%', background: '#e2e8f0', color: '#64748b',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold'
-  },
-  symptomBadge: {
-    marginTop: '5px', display: 'inline-block', background: '#fef3c7', color: '#d97706', 
-    padding: '6px 12px', borderRadius: '8px', fontSize: '0.9rem', fontWeight: '600'
-  },
-  editorForm: {
-    background: 'white', padding: '30px', borderRadius: '20px', boxShadow: '0 4px 20px rgba(0,0,0,0.04)',
-  },
-  formSection: { marginBottom: '25px' },
-  label: {
-    display: 'block', fontWeight: '700', color: '#334155', marginBottom: '10px', fontSize: '0.95rem'
-  },
-  inputArea: {
-    width: '100%', padding: '15px', borderRadius: '12px', border: '2px solid #e2e8f0', 
-    fontSize: '1rem', fontFamily: 'inherit', minHeight: '80px', resize: 'vertical', outline: 'none',
-    transition: 'border-color 0.2s', boxSizing: 'border-box'
-  },
-  inputShort: {
-    width: '100%', padding: '12px', borderRadius: '10px', border: '2px solid #e2e8f0', 
-    fontSize: '1rem', outline: 'none', boxSizing: 'border-box'
-  },
-  chipContainer: { display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' },
-  chip: {
-    background: '#f1f5f9', color: '#475569', padding: '6px 12px', borderRadius: '20px',
-    fontSize: '0.85rem', cursor: 'pointer', border: '1px solid #e2e8f0', transition: '0.2s'
-  },
-  medInputGroup: { display: 'flex', gap: '10px', marginBottom: '15px' },
-  btnAddMed: {
-    padding: '0 20px', background: '#3b82f6', color: 'white', border: 'none',
-    borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer'
-  },
-  medListContainer: {
-    border: '1px dashed #cbd5e1', borderRadius: '12px', padding: '15px', background: '#f8fafc', minHeight: '50px'
-  },
-  medItem: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    background: 'white', padding: '10px 15px', borderRadius: '8px', marginBottom: '8px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.03)'
-  },
-  btnRemove: { background: 'none', border: 'none', color: '#ef4444', fontWeight: 'bold', cursor: 'pointer' },
-  actionFooter: { marginTop: '20px', textAlign: 'right' },
-  btnSubmit: {
-    padding: '15px 30px', background: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%)',
-    color: 'white', border: 'none', borderRadius: '50px', fontSize: '1rem', fontWeight: 'bold', 
-    cursor: 'pointer', boxShadow: '0 10px 20px rgba(37, 99, 235, 0.3)', transition: 'transform 0.2s'
-  },
-  emptyState: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    height: '100%', color: '#cbd5e1', textAlign: 'center'
-  }
+  workspaceContainer: { display: 'flex', height: '100vh', background: '#f8fafc', overflow: 'hidden' },
+  sidebar: { flex: '0 0 350px', background: 'white', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column' },
+  sidebarHeader: { padding: '25px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  badgeCount: { background: '#fef2f2', color: '#ef4444', fontSize:'0.7rem', fontWeight:'900', padding:'5px 12px', borderRadius:'20px' },
+  cardList: { flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' },
+  patientCard: { background: 'white', borderRadius: '18px', padding: '18px', border: '1px solid #f1f5f9', cursor: 'pointer', transition: '0.3s' },
+  patientCardActive: { background: '#4f46e5', color: 'white', transform: 'translateX(10px)', boxShadow: '0 10px 25px rgba(79, 70, 229, 0.2)' },
+  cardTop: { display: 'flex', justifyContent: 'space-between', marginBottom: '10px' },
+  queueNum: { background: '#f1f5f9', color: '#64748b', padding:'3px 10px', borderRadius:'8px', fontWeight:'800', fontSize:'0.75rem' },
+  queueNumActive: { background: 'rgba(255,255,255,0.2)', color: 'white', padding:'3px 10px', borderRadius:'8px', fontWeight:'800', fontSize:'0.75rem' },
+  emptyQueue: { textAlign: 'center', marginTop: '100px', color: '#94a3b8', fontStyle: 'italic' },
+  
+  mainContent: { flex: 1, overflowY: 'auto', padding: '50px', display: 'flex', justifyContent: 'center' },
+  patientHeader: { display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '35px', background: 'white', padding: '25px', borderRadius: '24px', boxShadow: '0 4px 15px rgba(0,0,0,0.02)' },
+  avatar: { width: '60px', height: '60px', borderRadius: '20px', background: '#4f46e5', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold' },
+  symptomBadge: { marginTop: '8px', background: '#fffbeb', color: '#b45309', padding: '6px 14px', borderRadius: '12px', fontSize: '0.85rem', fontWeight: '700', border: '1px solid #fef3c7' },
+  
+  bentoForm: { background: 'white', padding: '40px', borderRadius: '32px', boxShadow: '0 20px 40px rgba(0,0,0,0.03)' },
+  formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '25px' },
+  inputGroup: { display: 'flex', flexDirection: 'column', gap: '10px' },
+  label: { fontSize: '0.75rem', fontWeight: '800', color: '#64748b', letterSpacing: '1px' },
+  textArea: { padding: '15px', borderRadius: '16px', border: '2px solid #f1f5f9', fontSize: '1rem', outline: 'none', transition: '0.3s', focus: { borderColor: '#4f46e5' } },
+  input: { padding: '12px 18px', borderRadius: '14px', border: '2px solid #f1f5f9', fontSize: '1rem', width: '100%' },
+  
+  medInputs: { display: 'flex', gap: '10px', marginBottom: '20px' },
+  btnAddMed: { background: '#0f172a', color: 'white', border: 'none', padding: '0 25px', borderRadius: '14px', fontWeight: 'bold', cursor: 'pointer' },
+  medBucket: { background: '#f8fafc', padding: '20px', borderRadius: '20px', border: '2px dashed #e2e8f0', minHeight: '60px' },
+  medItem: { display: 'flex', justifyContent: 'space-between', background: 'white', padding: '12px 18px', borderRadius: '12px', marginBottom: '10px', boxShadow: '0 2px 5px rgba(0,0,0,0.02)' },
+  btnRemove: { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 'bold' },
+  
+  btnSubmit: { width: '100%', marginTop: '40px', background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)', color: 'white', border: 'none', padding: '18px', borderRadius: '18px', fontSize: '1rem', fontWeight: '900', cursor: 'pointer', boxShadow: '0 15px 30px rgba(79, 70, 229, 0.3)' },
+  emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: '#cbd5e1' }
 };
 
 export default InputDiagnosis;
